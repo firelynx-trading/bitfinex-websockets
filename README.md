@@ -4,7 +4,7 @@ Bitfinex WebSockets client
 
 All that works so far is getting the ticker feed.  Contains a DLL and console app.
 
-Usage: `dotnet run -- ticker BTCUSD LTC`
+Usage: `dotnet run -- ticker BTCUSD LTCUSD`
 
 Output:
 
