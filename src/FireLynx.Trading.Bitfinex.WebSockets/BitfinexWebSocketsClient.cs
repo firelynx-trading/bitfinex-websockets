@@ -15,23 +15,37 @@ using ErrorEventArgs = SuperSocket.ClientEngine.ErrorEventArgs;
 
 namespace FireLynx.Trading.Bitfinex.WebSockets.V2
 {
-    public class BitfinexWebSocketClient
+    public partial class BitfinexWebSocketClient
     {
+        //public static bool Debug = false;
+
         public bool RequireVersion2 { get; set; } = true;
 
         JsonSerializerSettings serializerSettings;
+
+        #region Construction
+
         public BitfinexWebSocketClient()
         {
             serializerSettings = new JsonSerializerSettings();
             serializerSettings.ContractResolver = new CamelCasePropertyNamesContractResolver();
-
-
         }
+
+        #endregion
+
+        #region Events
+
+        public event Action<string, TickerEvent> TickerReceived;
+
+        #endregion
 
         #region State
 
         WebSocket websocket;
         int? serverVersion = null;
+
+        public Dictionary<int, Channel> Channels => channels;
+        private Dictionary<int, Channel> channels = new Dictionary<int, Channel>();
 
         #region IsConnected
 
@@ -68,70 +82,25 @@ namespace FireLynx.Trading.Bitfinex.WebSockets.V2
             {
                 websocket.Close();
                 websocket = null;
+                channels.Clear();
             }
         }
-        #endregion
 
+        #endregion
         #endregion
 
         #region Network Event Handlers
 
-        public class TradingTickerEvent
+        private void OnTradingTickerEvent(Channel channel, TickerEvent tte)
         {
-            public enum TickerFields : int
-            {
-                BID,
-                BID_SIZE,
-                ASK,
-                ASK_SIZE,
-                DAILY_CHANGE,
-                DAILY_CHANGE_PERC,
-                LAST_PRICE,
-                VOLUME,
-                HIGH,
-                LOW
-            }
-
-            public TradingTickerEvent() { }
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public TradingTickerEvent(JArray arr)
-            {
-                Bid = arr[(int)TickerFields.BID].Value<decimal>();
-                BidSize = arr[(int)TickerFields.BID_SIZE].Value<decimal>();
-                Ask = arr[(int)TickerFields.ASK].Value<decimal>();
-                AskSize = arr[(int)TickerFields.ASK_SIZE].Value<decimal>();
-                //DailyChange = arr[(int)TickerFields.DAILY_CHANGE].Value<decimal>();
-                DailyChangePercent = arr[(int)TickerFields.DAILY_CHANGE_PERC].Value<decimal>();
-                LastPrice = arr[(int)TickerFields.LAST_PRICE].Value<decimal>();
-                Volume = arr[(int)TickerFields.VOLUME].Value<decimal>();
-                //High = arr[(int)TickerFields.HIGH].Value<decimal>();
-                //Low = arr[(int)TickerFields.LOW].Value<decimal>();
-            }
-
-            public decimal Bid { get; set; }
-            public decimal BidSize { get; set; }
-            public decimal Ask { get; set; }
-            public decimal AskSize { get; set; }
-            public decimal Spread { get { return Ask - Bid; } }
-            public decimal DailyChange { get; set; }
-            public decimal DailyChangePercent { get; set; }
-            public decimal LastPrice { get; set; }
-            public decimal Volume { get; set; }
-            public decimal High { get; set; }
-            public decimal Low { get; set; }
-
+            //Debug.WriteLine(channel.pair + ": " + tte.LastPrice + " vol: " + tte.Volume + " (b: " + tte.Bid + " <" + tte.Spread + "> a: " + tte.Ask + ")  " + tte.DailyChangePercent + "%");
+            TickerReceived?.Invoke(channel.pair, tte);
         }
-
-        private void OnTradingTickerEvent(Channel channel, TradingTickerEvent tte)
-        {
-            Console.WriteLine(channel.pair + ": " + tte.LastPrice + " vol: " + tte.Volume + " (b: " + tte.Bid + " <" + tte.Spread + "> a: " + tte.Ask + ")  " + tte.DailyChangePercent + "%");
-        }
-
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void Websocket_MessageReceived(object sender, MessageReceivedEventArgs e)
         {
-            //Console.WriteLine("[in] " + e.Message);
+            //Debug.WriteLine("[in] " + e.Message);
 
             if (e.Message.StartsWith("["))
             {
@@ -147,41 +116,38 @@ namespace FireLynx.Trading.Bitfinex.WebSockets.V2
                     if (jarr[1].Type == JTokenType.String && jarr[1].Value<string>() == "hb")
                     {
 #if DisplayHeartbeats
-                            Console.Write(".");
+                            Debug.Write(".");
 #endif
-
                         return;
                     }
 
                     try
                     {
-                        OnTradingTickerEvent(channel, new TradingTickerEvent(jarr[1] as JArray));
+                        OnTradingTickerEvent(channel, new TickerEvent(jarr[1] as JArray));
                         return;
                     }
-                    catch (Exception) { Console.WriteLine("[exception trying to handle ticker message.  probably not a ticker message]"); }
+                    catch (Exception) { Debug.WriteLine("[exception trying to handle ticker message.  probably not a ticker message]"); }
                 }
                 {
-                    Console.WriteLine($"[UNKNOWN CHANNEL MESSAGE {channel}] ");
+                    Debug.WriteLine($"[UNKNOWN CHANNEL MESSAGE {channel}] ");
                     for (int i = 1; i < jarr.Count; i++)
                     {
-                        Console.WriteLine($" - " + jarr[i]);
+                        Debug.WriteLine($" - " + jarr[i]);
                     }
-                    Console.WriteLine("----");
+                    Debug.WriteLine("----");
                 }
 
             }
             else
             {
-
                 var jobj = JObject.Parse(e.Message);
-
 
                 Debug.WriteLine("[" + jobj["event"].Value<string>() + "]");
 
                 switch (jobj["event"].Value<string>())
                 {
                     case null:
-                        Console.WriteLine("[no event] " + e.Message);
+                        Debug.WriteLine("[no event] " + e.Message);
                         break;
                     case "subscribed":
                         OnSubscribed(jobj);
@@ -193,41 +159,39 @@ namespace FireLynx.Trading.Bitfinex.WebSockets.V2
                         OnInfo(JsonConvert.DeserializeObject<Info>(e.Message));
                         break;
                     case "error":
-                        Console.WriteLine("[ERROR] " + e.Message);
+                        Debug.WriteLine("[ERROR] " + e.Message);
                         break;
                     default:
-                        Console.WriteLine("[UNKNOWN] " + e.Message);
+                        Debug.WriteLine("[UNKNOWN] " + e.Message);
                         break;
                 }
             }
         }
 
-
-
         private void Websocket_Closed(object sender, EventArgs e)
         {
-            Console.WriteLine("[closed connection] ");
+            Debug.WriteLine("[closed connection] ");
             Disconnected?.Invoke();
         }
 
         private void Websocket_Error(object sender, SuperSocket.ClientEngine.ErrorEventArgs e)
         {
-            Console.WriteLine("[error] " + e.Exception);
+            Debug.WriteLine("[error] " + e.Exception);
         }
 
         private void Websocket_Opened(object sender, EventArgs e)
         {
-            Console.WriteLine("[opened] ");
+            Debug.WriteLine("[opened] ");
             Ping();
             Opened?.Invoke();
         }
 
         public event Action Opened;
         public event Action Disconnected;
-#endregion
+        #endregion
 
+        #region Outbound messages
 
-#region Outbound messages
         private void Send(object msg)
         {
             websocket.Send(JsonConvert.SerializeObject(msg, serializerSettings));
@@ -250,17 +214,28 @@ namespace FireLynx.Trading.Bitfinex.WebSockets.V2
 
         public void SubscribeTickerSymbol(string symbol)
         {
-
             Send(@"{""event"":""subscribe"",""channel"":""ticker"",""symbol"":""" + symbol + @"""}");
         }
-#endregion
+        public void UnsubscribeTickerSymbol(string symbol)
+        {
+            // TODO
+            //Send(@"{""event"":""unsubscribe"",""channel"":""ticker"",""symbol"":""" + symbol + @"""}");
+        }
+        #endregion
 
-#region Inbound Messages
+        #region Inbound Messages
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void OnInfo(Info msg)
         {
             serverVersion = msg.version;
+            if(msg.code == 20051)
+            {
+                Debug.WriteLine("[20051] UNTESTED -- server requested reconnect");
+                Disconnect();
+                Connect();
+                return;
+            }
             if (msg.version != 2 && RequireVersion2)
             {
                 throw new Exception("RequireVersion2 is true but version provided by server is " + msg.version);
@@ -280,30 +255,18 @@ namespace FireLynx.Trading.Bitfinex.WebSockets.V2
                 case "ticker":
 
                     channels.Add(jObject["chanId"].Value<int>(), channel = new Channel { pair = jObject["pair"].Value<string>() });
-                    Console.WriteLine("[subscribed] " + channel);
+                    Debug.WriteLine("[subscribed] " + channel);
                     break;
                 default:
-                    Console.WriteLine("[UNKNOWN SUBSCRIBED] " + jObject);
+                    Debug.WriteLine("[UNKNOWN SUBSCRIBED] " + jObject);
                     break;
             }
-            //Console.WriteLine("[subscribed] " + msg.chanId + " " + msg.channel);
+            //Debug.WriteLine("[subscribed] " + msg.chanId + " " + msg.channel);
         }
 
+        #endregion
 
-
-#endregion
-
-        private Dictionary<int, Channel> channels = new Dictionary<int, Channel>();
-    }
-
-    public class Channel
-    {
-        public string pair { get; set; }
-
-        public override string ToString()
-        {
-            return pair ?? "(null pair)";
-        }
+        
     }
 
 }
